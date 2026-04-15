@@ -928,6 +928,19 @@ done
 
 ```
 
+# GLM5/Context Parallel Benchmark
+##  Benchmark environment 
+* Hardware： Ascend 910C（A3） / 4 Pods
+Model：GLM5-W8A8 
+Draft Model：GLM5-W8A8-MTP
+PD Separation Configuration：
+              * P instance：cp_size = 16，dp_size = 1, ep_size = 1
+              * D instance：dp_size = 2， ep_size = 32
+xllm version：release/v0.9.0（9be308aec60ea4a2dd799ee021ea42d608f4e67c - lastcommit）
+
+
+
+
 Notes:
 
 - PD separation requires reading ==/etc/hccn.conf==; ensure the host file is mounted into the container.
