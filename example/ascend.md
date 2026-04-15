@@ -931,15 +931,505 @@ done
 # GLM5/Context Parallel Benchmark
 ##  Benchmark environment 
 * Hardware： Ascend 910C（A3） / 4 Pods
-Model：GLM5-W8A8 
-Draft Model：GLM5-W8A8-MTP
-PD Separation Configuration：
-              * P instance：cp_size = 16，dp_size = 1, ep_size = 1
-              * D instance：dp_size = 2， ep_size = 32
-xllm version：release/v0.9.0（9be308aec60ea4a2dd799ee021ea42d608f4e67c - lastcommit）
+* Model：GLM5-W8A8 
+* Draft Model：GLM5-W8A8-MTP
+* PD Separation Configuration：
+  * P instance：cp_size = 16，dp_size = 1, ep_size = 1
+  * D instance：dp_size = 2， ep_size = 32
+* xllm version：release/v0.9.0（9be308aec60ea4a2dd799ee021ea42d608f4e67c - lastcommit）
+
+## PD disagree server run script 
+### PD分离4机服务拉起
+#### 1.2.1、prefill双机实例拉起脚本
+##### 1.2.1.1、Prefill master节点启动脚本：
+```
+#!/bin/bash
+set -e
+
+rm -rf core.*
+rm -rf ~/ascend/log
+
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+source /usr/local/Ascend/nnal/atb/set_env.sh
+export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+export HCCL_IF_BASE_PORT=43432
+
+#export ASCEND_GLOBAL_LOG_LEVEL=1
+#export MINDIE_LOG_TO_STDOUT=1
+
+#export LCCL_DETERMINISTIC=1
+#export HCCL_DETERMINISTIC=true
+#export ATB_MATMUL_SHUFFLE_K_ENABLE=0
+
+#export ASCEND_LAUNCH_BLOCKING=1
+#export ATB_STREAM_SYNC_EVERY_KERNEL_ENABLE=1
+
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export NPU_MEMORY_FRACTION=0.96
+export ATB_WORKSPACE_MEM_ALLOC_ALG_TYPE=3
+export ATB_WORKSPACE_MEM_ALLOC_GLOBAL=1
+export ATB_LAYER_INTERNAL_TENSOR_REUSE=1
+export ATB_CONTEXT_WORKSPACE_SIZE=0
 
 
+MODEL_PATH="/export/home/models/GLM-5-final-w8a8/"
+#MODEL_PATH="/export/home/models/DeepSeek-V3.2-w8a8/"
+#DRAFT_MODEL_PATH="/export/home/models/DeepSeek-V3.2-w8a8-mtp"
+DRAFT_MODEL_PATH="/export/home/models/GLM-5-final-w8a8-MTP/"
+MASTER_NODE_ADDR="11.87.191.98:1895"
+START_PORT=48000
+START_DEVICE=0
+LOG_DIR="log"
+NNODES=32
+LOCAL_NODES=16
+LOCAL_HOST="11.87.191.98"
 
+mkdir -p $LOG_DIR
+
+
+    #--draft_model $DRAFT_MODEL_PATH \
+    #--draft_devices="npu:$DEVICE" \
+    #--num_speculative_tokens 3 \
+
+for (( i=0; i<$LOCAL_NODES; i++ ))
+do
+  PORT=$((START_PORT + i))
+  DEVICE=$((START_DEVICE + i))
+  LOG_FILE="$LOG_DIR/node_$i.log"
+  nohup numactl -C $((DEVICE*40))-$((DEVICE*40+39)) /export/home/shifengmin.3/workspace/lt_xllm/build/xllm/core/server/xllm \
+    --model $MODEL_PATH \
+    --devices="npu:$DEVICE" \
+    --port $PORT \
+    --host $LOCAL_HOST \
+    --master_node_addr=$MASTER_NODE_ADDR \
+    --draft_model $DRAFT_MODEL_PATH \
+    --draft_devices="npu:$DEVICE" \
+    --num_speculative_tokens 3 \
+    --nnodes=$NNODES \
+    --max_memory_utilization=0.7 \
+    --block_size=128 \
+    --max_seqs_per_batch=9000 \
+    --max_tokens_per_batch=67000 \
+    --communication_backend="hccl" \
+    --enable_prefix_cache=false \
+    --enable_chunked_prefill=false \
+    --enable_schedule_overlap=false \
+    --enable_disagg_pd=true \
+    --instance_role=PREFILL \
+    --etcd_addr=11.87.191.83:3389 \
+    --transfer_listen_port=$((26000+i)) \
+    --disagg_pd_port=7777 \
+    --cp_size 16 \
+    --dp_size 1 \
+    --ep_size 1 \
+    --node_rank=$i \
+    --rank_tablefile=/export/home/shifengmin.3/workspace/ranktable_9899_new.json \
+    > $LOG_FILE 2>&1 &
+
+done
+
+tail -f log/node_0.log
+```
+
+#### 1.2.1.2   Prefill slave节点启动脚本：
+```
+#!/bin/bash
+set -e
+
+rm -rf core.*
+rm -rf ~/ascend/log
+
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+source /usr/local/Ascend/nnal/atb/set_env.sh
+export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+export HCCL_IF_BASE_PORT=43432
+
+#export ASCEND_GLOBAL_LOG_LEVEL=1
+#export MINDIE_LOG_TO_STDOUT=1
+
+#export LCCL_DETERMINISTIC=1
+#export HCCL_DETERMINISTIC=true
+#export ATB_MATMUL_SHUFFLE_K_ENABLE=0
+
+#export ASCEND_LAUNCH_BLOCKING=1
+#export ATB_STREAM_SYNC_EVERY_KERNEL_ENABLE=1
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export NPU_MEMORY_FRACTION=0.96
+export ATB_WORKSPACE_MEM_ALLOC_ALG_TYPE=3
+export ATB_WORKSPACE_MEM_ALLOC_GLOBAL=1
+export ATB_LAYER_INTERNAL_TENSOR_REUSE=1
+export ATB_CONTEXT_WORKSPACE_SIZE=0
+
+MODEL_PATH="/export/home/models/GLM-5-final-w8a8/"
+#MODEL_PATH="/export/home/models/DeepSeek-V3.2-w8a8/"
+#DRAFT_MODEL_PATH="/export/home/models/DeepSeek-V3.2-w8a8-mtp"
+DRAFT_MODEL_PATH="/export/home/models/GLM-5-final-w8a8-MTP/"
+MASTER_NODE_ADDR="11.87.191.98:1895"
+START_PORT=48000
+START_DEVICE=0
+LOG_DIR="log"
+NNODES=32
+LOCAL_NODES=16
+LOCAL_HOST="11.87.191.99"
+
+mkdir -p $LOG_DIR
+
+
+    #--draft_model $DRAFT_MODEL_PATH \
+    #--draft_devices="npu:$DEVICE" \
+    #--num_speculative_tokens 3 \
+
+for (( i=0; i<$LOCAL_NODES; i++ ))
+do
+  PORT=$((START_PORT + i))
+  DEVICE=$((START_DEVICE + i))
+  LOG_FILE="$LOG_DIR/node_$i.log"
+  nohup numactl -C $((DEVICE*40))-$((DEVICE*40+39)) /export/home/shifengmin.3/workspace/lt_xllm/build/xllm/core/server/xllm \
+    --model $MODEL_PATH \
+    --devices="npu:$DEVICE" \
+    --port $PORT \
+    --host $LOCAL_HOST \
+    --master_node_addr=$MASTER_NODE_ADDR \
+    --draft_model $DRAFT_MODEL_PATH \
+    --draft_devices="npu:$DEVICE" \
+    --num_speculative_tokens 3 \
+    --nnodes=$NNODES \
+    --max_memory_utilization=0.7 \
+    --block_size=128 \
+    --max_seqs_per_batch=9000 \
+    --max_tokens_per_batch=67000 \
+    --communication_backend="hccl" \
+    --enable_prefix_cache=false \
+    --enable_chunked_prefill=false \
+    --enable_schedule_overlap=false \
+    --enable_disagg_pd=true \
+    --instance_role=PREFILL \
+    --etcd_addr=11.87.191.83:3389 \
+    --transfer_listen_port=$((26100+i)) \
+    --disagg_pd_port=7777 \
+    --cp_size 16 \
+    --dp_size 1 \
+    --ep_size 1 \
+    --node_rank=$((i+LOCAL_NODES)) \
+    --rank_tablefile=/export/home/shifengmin.3/workspace/ranktable_9899_new.json \
+    > $LOG_FILE 2>&1 &
+
+done
+
+tail -f log/node_0.log
+```
+### 1.2.2、decode双机实例拉起脚本
+#### 1.2.2.1、Decode master节点启动脚本：
+```
+#!/bin/bash
+set -e
+
+rm -rf core.*
+rm -rf ~/ascend/log
+
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+source /usr/local/Ascend/nnal/atb/set_env.sh
+export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+export HCCL_IF_BASE_PORT=43432
+
+#export ASCEND_GLOBAL_LOG_LEVEL=1
+#export MINDIE_LOG_TO_STDOUT=1
+
+#export LCCL_DETERMINISTIC=1
+#export HCCL_DETERMINISTIC=true
+#export ATB_MATMUL_SHUFFLE_K_ENABLE=0
+
+#export ASCEND_LAUNCH_BLOCKING=1
+#export ATB_STREAM_SYNC_EVERY_KERNEL_ENABLE=1
+
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export NPU_MEMORY_FRACTION=0.96
+export ATB_WORKSPACE_MEM_ALLOC_ALG_TYPE=3
+export ATB_WORKSPACE_MEM_ALLOC_GLOBAL=1
+export ATB_LAYER_INTERNAL_TENSOR_REUSE=1
+export ATB_CONTEXT_WORKSPACE_SIZE=0
+
+
+MODEL_PATH="/export/home/models/GLM-5-final-w8a8/"
+#MODEL_PATH="/export/home/models/DeepSeek-V3.2-w8a8/"
+#DRAFT_MODEL_PATH="/export/home/models/DeepSeek-V3.2-w8a8-mtp"
+DRAFT_MODEL_PATH="/export/home/models/GLM-5-final-w8a8-MTP/"
+MASTER_NODE_ADDR="11.87.191.83:1895"
+START_PORT=48000
+START_DEVICE=0
+LOG_DIR="log"
+NNODES=32
+LOCAL_NODES=16
+LOCAL_HOST="11.87.191.83"
+
+mkdir -p $LOG_DIR
+
+
+    #--draft_model $DRAFT_MODEL_PATH \
+    #--draft_devices="npu:$DEVICE" \
+    #--num_speculative_tokens 3 \
+
+for (( i=0; i<$LOCAL_NODES; i++ ))
+do
+  PORT=$((START_PORT + i))
+  DEVICE=$((START_DEVICE + i))
+  LOG_FILE="$LOG_DIR/node_$i.log"
+  nohup numactl -C $((DEVICE*40))-$((DEVICE*40+39)) /export/home/shifengmin.3/workspace/lt_xllm/build/xllm/core/server/xllm \
+    --model $MODEL_PATH \
+    --devices="npu:$DEVICE" \
+    --port $PORT \
+    --host $LOCAL_HOST \
+    --master_node_addr=$MASTER_NODE_ADDR \
+    --draft_model $DRAFT_MODEL_PATH \
+    --draft_devices="npu:$DEVICE" \
+    --num_speculative_tokens 3 \
+    --nnodes=$NNODES \
+    --max_memory_utilization=0.80 \
+    --block_size=128 \
+    --max_seqs_per_batch=9000 \
+    --communication_backend="hccl" \
+    --enable_prefix_cache=false \
+    --enable_chunked_prefill=false \
+    --enable_schedule_overlap=true \
+    --enable_shm=true \
+    --enable_graph=false \
+    --enable_graph_mode_decode_no_padding=false \
+    --enable_disagg_pd=true \
+    --instance_role=DECODE \
+    --etcd_addr=11.87.191.83:3389 \
+    --transfer_listen_port=$((26000+i)) \
+    --disagg_pd_port=7777 \
+    --dp_size 2 \
+    --ep_size 32 \
+    --node_rank=$i \
+    --rank_tablefile=/export/home/shifengmin.3/workspace/ranktable_8382_new.json \
+    > $LOG_FILE 2>&1 &
+
+done
+
+tail -f log/node_0.log
+```
+#### 1.2.2.2、Decode slave节点启动脚本：
+```
+#!/bin/bash
+set -e
+
+rm -rf core.*
+rm -rf ~/ascend/log
+
+source /usr/local/Ascend/ascend-toolkit/set_env.sh
+source /usr/local/Ascend/nnal/atb/set_env.sh
+export ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+export HCCL_IF_BASE_PORT=43432
+
+#export ASCEND_GLOBAL_LOG_LEVEL=1
+#export MINDIE_LOG_TO_STDOUT=1
+
+#export LCCL_DETERMINISTIC=1
+#export HCCL_DETERMINISTIC=true
+#export ATB_MATMUL_SHUFFLE_K_ENABLE=0
+
+#export ASCEND_LAUNCH_BLOCKING=1
+#export ATB_STREAM_SYNC_EVERY_KERNEL_ENABLE=1
+
+export PYTORCH_NPU_ALLOC_CONF=expandable_segments:True
+export NPU_MEMORY_FRACTION=0.96
+export ATB_WORKSPACE_MEM_ALLOC_ALG_TYPE=3
+export ATB_WORKSPACE_MEM_ALLOC_GLOBAL=1
+export ATB_LAYER_INTERNAL_TENSOR_REUSE=1
+export ATB_CONTEXT_WORKSPACE_SIZE=0
+
+
+MODEL_PATH="/export/home/models/GLM-5-final-w8a8/"
+#MODEL_PATH="/export/home/models/DeepSeek-V3.2-w8a8/"
+#DRAFT_MODEL_PATH="/export/home/models/DeepSeek-V3.2-w8a8-mtp"
+DRAFT_MODEL_PATH="/export/home/models/GLM-5-final-w8a8-MTP/"
+MASTER_NODE_ADDR="11.87.191.83:1895"
+START_PORT=48000
+START_DEVICE=0
+LOG_DIR="log"
+NNODES=32
+LOCAL_NODES=16
+LOCAL_HOST="11.87.191.82"
+
+mkdir -p $LOG_DIR
+
+
+    #--draft_model $DRAFT_MODEL_PATH \
+    #--draft_devices="npu:$DEVICE" \
+    #--num_speculative_tokens 3 \
+
+for (( i=0; i<$LOCAL_NODES; i++ ))
+do
+  PORT=$((START_PORT + i))
+  DEVICE=$((START_DEVICE + i))
+  LOG_FILE="$LOG_DIR/node_$i.log"
+  nohup numactl -C $((DEVICE*40))-$((DEVICE*40+39)) /export/home/shifengmin.3/workspace/lt_xllm/build/xllm/core/server/xllm \
+    --model $MODEL_PATH \
+    --devices="npu:$DEVICE" \
+    --port $PORT \
+    --host $LOCAL_HOST \
+    --master_node_addr=$MASTER_NODE_ADDR \
+    --draft_model $DRAFT_MODEL_PATH \
+    --draft_devices="npu:$DEVICE" \
+    --num_speculative_tokens 3 \
+    --nnodes=$NNODES \
+    --max_memory_utilization=0.80 \
+    --block_size=128 \
+    --max_seqs_per_batch=9000 \
+    --communication_backend="hccl" \
+    --enable_prefix_cache=false \
+    --enable_chunked_prefill=false \
+    --enable_schedule_overlap=true \
+    --enable_shm=true \
+    --enable_graph=false \
+    --enable_graph_mode_decode_no_padding=false \
+    --enable_disagg_pd=true \
+    --instance_role=DECODE \
+    --etcd_addr=11.87.191.83:3389 \
+    --transfer_listen_port=$((26100+i)) \
+    --disagg_pd_port=7777 \
+    --dp_size 2 \
+    --ep_size 32 \
+    --node_rank=$((i+LOCAL_NODES)) \
+    --rank_tablefile=/export/home/shifengmin.3/workspace/ranktable_8382_new.json \
+    > $LOG_FILE 2>&1 &
+
+done
+
+tail -f log/node_0.log
+```
+
+## Latency Benchmark
+### 2.2.1、Custom Dataset - input/output configuration
+Modified Location：/benchmark/ais_bench/datasets/synthetic/synthetic_config.py
+```
+#
+# [Uniform均匀分布] -- "Method" : "uniform"
+#   - MinValue: 最小值，范围为 [1, 2**20]
+#   - MaxValue: 最大值, 范围为 [1, 2**20], 可等于MinValue
+#
+# [Gaussian高斯分布] -- "Method" : "gaussian"
+#   - Mean    : 平均值, 范围为 [-3.0e38, 3.0e38]，分布中心位置
+#   - Var     : 方差, 范围为[0, 3.0e38]，控制数据分散程度
+#   - MinValue: 最小值, 范围为 [1, 2**20], 可低于Mean
+#   - MaxValue: 最大值, 范围为 [1, 2**20], 可高于Mean, 可等于MinValue
+#
+# [Zipf齐夫分布] -- "Method" : "zipf"
+#   - Alpha   : 形状参数, 范围为(1.0,10.0], 值越大分布越均匀
+#   - MinValue: 最小值, 范围为 [1, 2**20]
+#   - MaxValue: 最大值, 范围为 [1, 2**20], 需大于MinValue
+"""
+synthetic_config = {
+    "Type":"tokenid",   # [tokenid/string]，生成的随机数据集类型，支持固定长度的随机tokenid，和随机长度的string，两种类型的数据集
+    "RequestCount": 10, # 生成的请求条数，应与模型侧配置文件中的 decode_batch_size 一致
+    "TrustRemoteCode": False, #是否信任远端代码，tokenid模式下需要加载tokenizer生成tokenid，默认为Fasle
+    "StringConfig" : {  # string类型的随机数据集的配置相关项，请参考以上注释处："StringConfig中的随机生成方法参数说明"
+        "Input" : {     # 每条请求的输入长度
+            "Method": "uniform",
+            "Params": {"MinValue": 16384, "MaxValue": 16384}
+        },
+        "Output" : {    # 每条请求的输出长度
+            "Method": "gaussian",
+            "Params": {"Mean": 1024, "Var": 0, "MinValue": 1024, "MaxValue": 1024}
+        }
+    },
+    "TokenIdConfig" : { # tokenid类型的随机数据集的配置相关项
+        "RequestSize": 16384 # 每条请求的长度，即每条请求中token id的个数，应与模型侧配置文件中的 input_seq_len 一致
+    }
+}
+```
+### 2.2.2、aisbench客户端配置
+Modified Location：/benchmark/ais_bench/benchmark/configs/models/vllm_api/vllm_api_stream_chat.py
+```
+from ais_bench.benchmark.models import VLLMCustomAPIChatStream
+from ais_bench.benchmark.utils.model_postprocessors import extract_non_reasoning_content
+
+models = [
+    dict(
+        attr="service",
+        type=VLLMCustomAPIChatStream,
+        abbr='vllm-api-stream-chat',
+        path="[$GLM5_weight]",
+        model="[$GLM5_mtp_weight]",
+        request_rate = 0,
+        retry = 1,
+        host_ip = "[$server_ip]",
+        host_port = [$server_port],
+        max_out_len = 1,
+        batch_size=1,
+        trust_remote_code=False,
+        generation_kwargs = dict(
+            temperature = 0,
+            top_k = -1,
+            top_p = 1,
+            seed = None,
+            repetition_penalty = 1.03,
+            ignore_eos=True,
+        ),
+        pred_postprocessor=dict(type=extract_non_reasoning_content)
+    )
+]
+```
+
+### 2.2.3、aisbench command 
+```
+ais_bench --models vllm_api_stream_chat --datasets synthetic_gen -m perf
+```
+
+## 2.3、benchmark data
+### 2.3.1、32k/2k
+* TTFT： P99  3.36/s
+* TPOT：P99 42/ms
+
+```
+╒══════════════════════════╤═════════╤═════════════════╤═════════════════╤═════════════════╤═════════════════╤═════════════════╤═════════════════╤═════════════════╤═════╕
+│ Performance Parameters   │ Stage   │ Average         │ Min             │ Max             │ Median          │ P75             │ P90             │ P99             │  N  │
+╞══════════════════════════╪═════════╪═════════════════╪═════════════════╪═════════════════╪═════════════════╪═════════════════╪═════════════════╪═════════════════╪═════╡
+│ E2EL                     │ total   │ 77142.7 ms      │ 63874.8 ms      │ 89564.7 ms      │ 78482.0 ms      │ 82704.9 ms      │ 84642.2 ms      │ 89072.4 ms      │ 10  │
+├──────────────────────────┼─────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────┤
+│ TTFT                     │ total   │ 3221.8 ms       │ 3179.5 ms       │ 3375.2 ms       │ 3198.3 ms       │ 3230.2 ms       │ 3255.4 ms       │ 3363.2 ms       │ 10  │
+├──────────────────────────┼─────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────┤
+│ TPOT                     │ total   │ 36.1 ms         │ 29.6 ms         │ 42.2 ms         │ 36.8 ms         │ 38.8 ms         │ 39.8 ms         │ 42.0 ms         │ 10  │
+├──────────────────────────┼─────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────┤
+│ ITL                      │ total   │ 88.0 ms         │ 0.0 ms          │ 1866.4 ms       │ 89.9 ms         │ 92.0 ms         │ 93.9 ms         │ 110.2 ms        │ 10  │
+├──────────────────────────┼─────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────┤
+│ InputTokens              │ total   │ 32744.3         │ 32629.0         │ 32923.0         │ 32733.5         │ 32801.25        │ 32867.2         │ 32917.42        │ 10  │
+├──────────────────────────┼─────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────┤
+│ OutputTokens             │ total   │ 2048.0          │ 2048.0          │ 2048.0          │ 2048.0          │ 2048.0          │ 2048.0          │ 2048.0          │ 10  │
+├──────────────────────────┼─────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────────────────┼─────┤
+│ OutputTokenThroughput    │ total   │ 26.8428 token/s │ 22.8662 token/s │ 32.0627 token/s │ 26.0953 token/s │ 27.7358 token/s │ 31.9176 token/s │ 32.0482 token/s │ 10  │
+╘══════════════════════════╧═════════╧═════════════════╧═════════════════╧═════════════════╧═════════════════╧═════════════════╧═════════════════╧═════════════════╧═════╛
+╒══════════════════════════╤═════════╤════════════════════╕
+│ Common Metric            │ Stage   │ Value              │
+╞══════════════════════════╪═════════╪════════════════════╡
+│ Benchmark Duration       │ total   │ 771444.3698 ms     │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Total Requests           │ total   │ 10                 │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Failed Requests          │ total   │ 0                  │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Success Requests         │ total   │ 10                 │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Concurrency              │ total   │ 1.0                │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Max Concurrency          │ total   │ 1                  │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Request Throughput       │ total   │ 0.013 req/s        │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Total Input Tokens       │ total   │ 327443             │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Prefill Token Throughput │ total   │ 10163.3049 token/s │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Total Generated Tokens   │ total   │ 20480              │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Input Token Throughput   │ total   │ 424.4545 token/s   │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Output Token Throughput  │ total   │ 26.5476 token/s    │
+├──────────────────────────┼─────────┼────────────────────┤
+│ Total Token Throughput   │ total   │ 451.0021 token/s   │
+╘══════════════════════════╧═════════╧═════════════════
+```
 
 Notes:
 
