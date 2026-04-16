@@ -930,7 +930,7 @@ done
 
 # GLM5/Context Parallel Benchmark
 ##  Benchmark environment 
-* Hardware： Ascend 910C（A3） / 4 Nodes
+* Hardware： Ascend A3 / 4 Nodes
 * Model：GLM5-W8A8 
 * Draft Model：GLM5-W8A8-MTP
 * PD Separation Configuration：
